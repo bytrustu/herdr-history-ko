@@ -400,7 +400,7 @@ export default class Spaces extends View {
       const folded = this.folded.has(m);
       const icon = svg(`mods/workspace-chrome/${m ? "server" : "monitor"}.svg`).size(13).flex_none();
       const badge = div().absolute().right(-3).bottom(-2).size(6).rounded(3).border_1().border_color(t.chrome).bg(connected ? t.ansi2 : t.dim);
-      const head = h_flex().id(`machine-${m ?? "local"}`).h(26).flex_none().px(collapsed ? 0 : 8).gap(7).items_center().text_size(11).font_medium().text_color(t.muted)
+      const head = h_flex().id(`machine-${m ?? "local"}`).h(26).flex_none().px(collapsed ? 0 : 8).gap(7).items_center().text_size(11).font_semibold().text_color(t.muted)
         .when(collapsed, el => el.mt(4).w(RAIL_CELL).justify_center().rounded(6).tooltip(login ? `${m}: 로그인이 필요합니다. 실행: ${login}` : m ? `${m} · ${connected ? "연결됨" : (STATE[machine?.state ?? "asleep"] ?? (machine?.state ?? "asleep").replace(/_/g, " "))}` : "이 컴퓨터"))
         .cursor_pointer().hover(s => s.bg(t.hover))
         .on_click((_e, cx) => {
@@ -414,7 +414,9 @@ export default class Spaces extends View {
           .on_click((_e, cx) => { cx.stop_propagation(); openOverlay({ mod: "machine-add", kind: "dialog", width: 560 }); }).child("⚠")))
         .when(!collapsed, el => el.child(icon))
         .when(collapsed, el => el.child(div().relative().flex_none().child(icon).when(Boolean(m), el => el.child(badge))))
-        .when(!collapsed, el => el.child(div().flex_1().truncate().child(m ?? "이 컴퓨터"))
+        .when(!collapsed, el => el.child(h_flex().flex_1().min_w(0).gap(6).items_center()
+            .child(div().min_w(0).truncate().child(m ?? "이 컴퓨터"))
+            .when(mine.length > 0, el => el.child(div().flex_none().font_normal().text_color(t.dim).child(String(mine.length)))))
           .when(!connected && !rebuilt && !login, el => el.child(div().flex_none().font_normal().text_color(t.dim).child(STATE[machine?.state ?? "asleep"] ?? (machine?.state ?? "asleep").replace(/_/g, " "))))
           .when(rebuilt, el => el.child(h_flex().flex_none().gap(3).items_center()
             .child(div().max_w(140).truncate().child(repair?.error || "다시 만들어짐 ·"))
@@ -535,13 +537,16 @@ export default class Spaces extends View {
         cx.notify();
       })
       .on_mouse_down("right", () => this.menu(w))
+      // 컴퓨터 아래의 스페이스: 컴퓨터 아이콘 밑으로 내려오는 선 하나로 어느 컴퓨터의 것인지 잇는다.
+      .when(Boolean(this.nested), el => el.child(div().absolute().left(14).top(0).bottom(0).w(1).bg(t.border)))
       .child(
         h_flex()
           .gap(9)
           .items_center()
-          .when(Boolean(tree), el => el.pl(22).child(svg("mods/workspace-chrome/branch.svg").size(13).flex_none().text_color(t.dim)))
-          .when(!tree && Boolean(this.nested), el => el.pl(8))
-          .when(!tree, el => el.child(h_flex().size(18).flex_none().rounded(5).bg(fill).items_center().justify_center().text_size(10.5).font_bold().text_color("#ffffff").child([...w.name][0]?.toUpperCase() ?? "?")))
+          .when(Boolean(tree), el => el.pl(this.nested ? 30 : 22).child(svg("mods/workspace-chrome/branch.svg").size(13).flex_none().text_color(t.dim)))
+          .when(!tree && Boolean(this.nested), el => el.pl(14))
+          // 스페이스 표지: 글자 사각형 대신 스페이스 색 점(에이전트 목록의 묶음 머리와 같다).
+          .when(!tree, el => el.child(div().size(8).flex_none().rounded(4).bg(fill)))
           .child(div().flex_initial().min_w(SIDE_MIN).truncate().text_color(t.foreground).when(on, el => el.font_medium()).child(w.name))
           .child(g ? this.gitTail(g, tree, w.name, t) : div().flex_1())
           .when(Boolean(crew), el => el.child(crew)),

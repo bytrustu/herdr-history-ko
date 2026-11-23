@@ -5,7 +5,7 @@
 
 import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { agents, terminals, panes, focused, spaces, run, theme, shared, setShared, setAgentOrder, openOverlay, closeOverlay, props, window, layout } from "herdr";
+import { agents, terminals, panes, focused, spaces, run, theme, shared, setShared, setAgentOrder, openOverlay, closeOverlay, props, window, layout, hc, exec, checking } from "herdr";
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -33,6 +33,15 @@ function toggleSidebar() {
 // Stops at an opening bracket or quote, so a title that starts with one ("[web] login") keeps it.
 const clean = (s) => (s ?? "").replace(/^[^\p{L}\p{N}\p{Ps}\p{Pi}]+/u, "").replace(/^\[ [!.] \] /, "").trim();
 
+// Antigravity(agy)는 터미널 제목을 비워 두어 이름 대신 「Antigravity」만 보였다. 그 agy 가 열어 둔
+// 대화(presence/<대화>.lock)의 제목을 agy 의 요약 DB 에서 읽는다. 다른 컴퓨터의 agy 는 그 컴퓨터에서 읽는다.
+const AGY = new Map(); // 터미널 주소 -> { name, at }
+const AGY_TITLE = `PATH="$PATH:/usr/sbin:/usr/bin:/sbin:/bin"
+id=$(lsof -a -p "$1" -Fn 2>/dev/null | sed -n 's#^n.*/antigravity-cli/presence/\\([0-9a-f-]*\\)\\.lock$#\\1#p' | head -n 1)
+[ -n "$id" ] || exit 0
+exec sqlite3 -readonly "file:$HOME/.gemini/antigravity-cli/conversation_summaries.db?immutable=1" "select title from conversation_summaries where conversation_id='$id'" 2>/dev/null`;
+const agyName = (l) => (l?.app === "antigravity" ? AGY.get(l.terminal ?? l.address)?.name ?? "" : "");
+
 function leadPanes(all) {
   const leads = new Map();
   for (const p of all) {
@@ -46,7 +55,11 @@ function leadPanes(all) {
 
 function title(tab, l) {
   const prog = l?.program?.name;
-  const live = clean(l?.title);
+  // agy 의 터미널 제목은 비었거나 프로그램 이름뿐이라, 읽어 둔 대화 제목이 있으면 그것을 쓴다.
+  const raw = clean(l?.title);
+  const agy = clean(agyName(l));
+  const bare = !raw || raw === (l?.terminal ?? l?.address) || raw === prog || raw.toLowerCase() === l?.program?.key || raw.toLowerCase() === "agy";
+  const live = agy && bare ? agy : raw;
   // clean() would strip a path's leading ~ or /: test the title with only its status glyph gone.
   const path = /^[~/]|^[A-Za-z]:\\/.test((l?.title ?? "").replace(/^[^\p{L}\p{N}~/]+/u, ""));
   const telling = live && live !== (l?.terminal ?? l?.address) && live !== prog && !path && !live.includes("@") && live.toLowerCase() !== l?.program?.key;
@@ -67,7 +80,9 @@ const SORTS = [
 const sortOf = () => SORTS.find((s) => s.id === shared("agents.sort")) ?? SORTS[0];
 const SECTION = { 4: "확인 필요", 3: "끝남", 2: "작업 중", 1: "쉬는 중" };
 // 상태를 부르는 말(풍선말), 스페이스 표지의 색(spaces 와 같다).
-const WORD = { blocked: "확인 필요", done: "끝남 · 아직 보지 않음", working: "작업 중", idle: "쉬는 중" };
+const WORD = { blocked: "확인 필요", done: "끝남 · 아직 보지 않음", working: "작업 중", idle: "쉬는 중", finished: "끝남 · 확인함" };
+// 끝난 지 이만큼이 지나기 전에는 흐리게 하지 않는다: 방금 끝난 일은 아직 소식이다.
+const FRESH = 3600000;
 const MARK = { ansi6: "#22a99a", ansi3: "#e3814f", ansi4: "#5b8def", ansi5: "#8b7cf6", ansi2: "#3fae6a", ansi1: "#d9649a" };
 const SECTION_STATUS = { 4: "blocked", 3: "done", 2: "working" };
 
@@ -97,6 +112,37 @@ export default class Agents extends View {
     if (!this.pendingPins.length) localStorage.removeItem("pins");
     this.migratingPins = new Set();
     cx.timer.every(30000, (cx) => cx.notify());
+    this.agyBusy = new Set();
+    cx.timer.every(5000, (cx) => this.refreshAgy(cx));
+  }
+
+  // agy 의 대화 제목: 처음 보면 바로, 그 뒤로는 1분마다 다시 읽는다(대화가 이어지며 제목이 바뀐다).
+  refreshAgy(cx) {
+    if (checking()) return;
+    const now = Date.now();
+    const due = agents().filter((a) => a.app === "antigravity" && !this.agyBusy.has(a.address) && now - (AGY.get(a.address)?.at ?? 0) > 60000);
+    if (!due.length) return;
+    const machineOf = new Map(spaces().map((s) => [s.id, s.machine ?? null]));
+    for (const a of due) this.agyBusy.add(a.address);
+    cx.spawn(async (cx) => {
+      let changed = false;
+      for (const a of due) {
+        const old = AGY.get(a.address)?.name ?? "";
+        let name = old;
+        try {
+          const g = await hc(["get", a.address, "--json"]);
+          const pid = g.code === 0 ? JSON.parse(g.stdout)?.foreground?.pid : null;
+          if (pid) {
+            const r = await exec("sh", ["-c", AGY_TITLE, "sh", String(pid)], { on: machineOf.get(a.space) ?? null, timeout: 8000 });
+            if (r.code === 0) name = clean(r.stdout.split("\n")[0]);
+          }
+        } catch {}
+        AGY.set(a.address, { name, at: Date.now() });
+        this.agyBusy.delete(a.address);
+        if (name !== old) changed = true;
+      }
+      if (changed) cx.notify();
+    });
   }
 
   // Stamps agents whose state changed. Done and idle count as one: looking at a
@@ -105,8 +151,10 @@ export default class Agents extends View {
     let dirty = false;
     for (const a of list) {
       const s = a.status === "done" ? "idle" : a.status;
-      if (this.changed[a.address]?.s === s) continue;
-      this.changed[a.address] = { s, at: now };
+      const prev = this.changed[a.address];
+      if (prev?.s === s) continue;
+      // w: 일하다 멈췄는가. 처음 본 쉬는 에이전트는 끝낸 일이 없다.
+      this.changed[a.address] = { s, at: now, w: prev ? prev.s !== "idle" : false };
       dirty = true;
     }
     if (!dirty) return;
@@ -138,6 +186,12 @@ export default class Agents extends View {
 
   since(a) {
     return this.changed[a.address]?.at ?? 0;
+  }
+
+  // 상태 표지에 넘길 것: 쉬는 중이면 일을 끝내고 쉬는지(finished), 끝난 지 한 시간이 안 됐는지(fresh).
+  markOf(a, now) {
+    const idle = a.status === "idle";
+    return { status: a.status, finished: idle && this.changed[a.address]?.w !== false, fresh: idle && now - this.since(a) < FRESH };
   }
 
   rank(a) {
@@ -218,7 +272,9 @@ export default class Agents extends View {
     if (a.status === "working") return svg("mods/workspace-chrome/spinner.svg").size(12).mx(1).flex_none().text_color(t.working).spin(900);
     if (a.status === "blocked" && compact) return div().size(14).flex_none().rounded(4).bg(t.blocked + "26").text_size(10.5).font_bold().text_color(t.blocked).flex().items_center().justify_center().child("!");
     if (a.status === "blocked") return div().flex_none().px(6).h(18).rounded(5).bg(t.blocked + "26").text_size(10.5).font_semibold().text_color(t.blocked).flex().items_center().child("확인 필요");
-    // Idle: a ring; done: a dot.
+    // 끝남(아직 안 봄): 옅은 원 안의 체크. 끝내고 본 것: 체크만(방금이면 끝남 색, 오래되면 흐린 색). 일한 적 없는 쉬는 중: 고리.
+    if (a.status === "done") return div().size(14).flex_none().rounded(7).bg(color + "26").flex().items_center().justify_center().child(svg("mods/workspace-chrome/check.svg").size(10).text_color(color));
+    if (a.status === "idle" && a.finished) return h_flex().size(14).flex_none().items_center().justify_center().child(svg("mods/workspace-chrome/check.svg").size(12).text_color(a.fresh ? (t.done ?? t.dim) : t.dim));
     if (a.status === "idle") return div().size(7).mx(3).flex_none().rounded(4).border(1.5).border_color(t.idle ?? t.dim);
     return div().size(7).mx(3).flex_none().rounded(4).bg(a.status === "done" ? color : t.dim + "00");
   }
@@ -328,10 +384,14 @@ export default class Agents extends View {
           .hover((s) => s.bg(t.hover))
           .on_click(() => run("pane.focus", { pane: a.pane }))
           .child(div().flex_1().min_w(0).whitespace_nowrap().text_right().text_color(t.muted).child(String(i + 1)))
-          .child(h_flex().w(14).flex_none().items_center().justify_center().child(this.status(t, a, true)));
+          .child(h_flex().w(14).flex_none().items_center().justify_center().child(this.status(t, this.markOf(a, now), true)));
       }
       const when = this.since(a);
-      const idle = a.status === "idle" && !a.focused;
+      // 작업 중은 진하게. 쉬는 중은 끝난 지 한 시간이 지나야 흐리게: 방금 끝난 일은 끝났다는 게 보여야 한다.
+      const mark = this.markOf(a, now);
+      const { finished, fresh } = mark;
+      const idle = a.status === "idle" && !a.focused && !fresh;
+      const working = a.status === "working";
       const isPinned = a.pinned;
       const pin = div()
         .id(`pin-${a.address}`)
@@ -364,6 +424,8 @@ export default class Agents extends View {
         .items_center()
         .gap(9)
         .when(a.focused, (el) => el.bg(t.selected))
+        .when(working && !a.focused, (el) => el.bg(t.working + "14"))
+        .when(idle && this.hovered !== a.address, (el) => el.opacity(0.55))
         .cursor_pointer()
         .hover((s) => s.bg(t.hover))
         .on_hover((on, cx) => {
@@ -379,15 +441,15 @@ export default class Agents extends View {
             cx.notify();
           })).child(pic)))
         .child(h_flex().flex_1().min_w(0).gap(5).items_center()
-          .child(div().min_w(0).max_w(full && more ? 120 : 200).truncate().text_color(idle ? t.muted : t.foreground).child(name))
+          .child(div().min_w(0).max_w(full && more ? 120 : 200).truncate().text_color(idle ? t.muted : t.foreground).when(working, (el) => el.font_semibold()).child(name))
           .when(full && Boolean(more), el => el.child(div().flex_1().min_w(0).truncate().text_color(t.dim).child(`\u00b7 ${more}`))))
         .when(Boolean(machine) && full, el => el.child(h_flex().flex_none().max_w(96).gap(3).items_center().text_size(11).text_color(t.dim)
           .child(svg("mods/workspace-chrome/server.svg").size(11).flex_none())
           .child(div().min_w(0).truncate().child(machine))))
         .when(subs.length > 0, el => el.child(fold(a, subs)))
         .when(this.hovered === a.address, el => el.child(pin))
-        .when(this.hovered !== a.address && Boolean(when), el => el.child(div().flex_none().text_size(11).text_color(a.status === "working" ? (t.working ?? t.dim) : a.status === "done" ? (t.done ?? t.dim) : t.dim).child(duration(now - when))))
-        .child(div().id(`st-${a.address}`).flex_none().tooltip(WORD[a.status] ?? "").child(this.status(t, a, byPriority && !isPinned)));
+        .when(this.hovered !== a.address && Boolean(when), el => el.child(div().flex_none().text_size(11).text_color(a.status === "working" ? (t.working ?? t.dim) : a.status === "done" ? (t.done ?? t.dim) : finished && fresh ? t.muted : t.dim).child(duration(now - when))))
+        .child(div().id(`st-${a.address}`).flex_none().tooltip(finished ? WORD.finished : WORD[a.status] ?? "").child(this.status(t, mark, byPriority && !isPinned)));
     };
 
     // Groups in list order: spaces (grouped) or priority sections. Agents of a
@@ -406,13 +468,12 @@ export default class Agents extends View {
       else groups.push({ id, label: byPriority ? SECTION[r] : a.space_name || "", status: byPriority ? SECTION_STATUS[r] : null, space: byPriority ? null : a.space, machine: machineOf(a), members: [a] });
     }
 
-    // 스페이스 묶음의 머리에 붙는 표지: 스페이스 목록과 같은 색, 이름의 첫 글자.
+    // 스페이스 묶음의 머리에 붙는 표지: 스페이스 목록과 같은 색 점.
     const colors = shared("space.colors") ?? {};
     const here = spaceList.find((s) => s.active)?.id; // 지금 보고 있는 스페이스
     const mark = (g) => {
       const c = colors[g.space] ?? "ansi6";
-      return h_flex().size(15).flex_none().rounded(4).bg(c.startsWith("#") ? c : (MARK[c] ?? t[c])).items_center().justify_center()
-        .text_size(9).font_bold().text_color("#ffffff").child([...g.label][0]?.toUpperCase() ?? "?");
+      return div().size(8).mx(3).flex_none().rounded(4).bg(c.startsWith("#") ? c : (MARK[c] ?? t[c]));
     };
     // A group's header; it folds the group. Folded, it says how many and the most urgent state.
     const header = (g) => {

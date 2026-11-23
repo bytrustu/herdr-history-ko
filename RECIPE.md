@@ -1,22 +1,24 @@
-# herdr-history-ko
+# Session History KR
 
-Herdr 오른쪽에 「히스토리」 패널을 붙이고, 에이전트가 연 HTML 문서를 Herdr 안에서 보는 「문서 보기」 창을 더하고, 왼쪽 사이드바를 한글로 다듬은 레이아웃이다. 패널은 지금 보고 있는 에이전트(Claude Code · Codex · Antigravity)에게 보낸 요청을 하나씩 나눠, 요청마다 무엇을 했고 누가(모델 · effort) 했는지 보여 준다. 사이드바는 컴퓨터 아래에 스페이스를 들여 쓰고, 에이전트를 급한 순서 · 스페이스별 · 컴퓨터별로 정렬한다. 화면 글자는 모두 한국어다.
+Claude Code, Codex, Antigravity에 맡긴 일이 어디까지 진행됐는지 히스토리에서 요청별로 확인합니다. 에이전트가 만든 HTML 문서는 Herdr 안에서 바로 봅니다. 한글 사이드바는 스페이스를 컴퓨터별로 묶고, 확인이 필요한 에이전트부터 보여 줍니다.
 
-![herdr-history-ko](preview.png)
+![Session History KR](preview.png)
 
-레이아웃은 둘이다. `history-sidebar` 는 한글 사이드바와 히스토리, `history` 는 Herdr 기본 사이드바와 히스토리다.
+레이아웃은 두 가지입니다. 둘 다 히스토리를 보여 주며, `history-sidebar` 는 한글 사이드바를, `history` 는 Herdr 기본 사이드바를 씁니다.
 
 **What you see:**
 
 왼쪽에서 오른쪽으로.
 
 - **사이드바**(268px, `chrome` 바탕): 위 46px 는 기본 `workspace-chrome`, 가운데는 스페이스 목록과 에이전트 목록이 같은 비율(각각 최소 90px), 바닥 69px 는 「설정」 · 「컴퓨터 추가」.
-  - 스페이스 목록: 머리 「스페이스 N」과 +. 다른 컴퓨터가 등록되어 있으면 컴퓨터 줄(11px, 이 컴퓨터는 모니터 아이콘과 「이 컴퓨터」, 다른 컴퓨터는 서버 아이콘과 이름, 연결 점, +, 접기 화살표)이 생기고 그 아래 스페이스 줄이 8px 들여 쓰인다. 스페이스 줄은 색 표지(이름 첫 글자), 이름, 평범하지 않을 때만 저장소 · 브랜치, 오른쪽에 그 안의 에이전트 수와 가장 급한 상태.
+  - 스페이스 목록: 머리 「스페이스 N」과 +. 다른 컴퓨터가 등록되어 있으면 컴퓨터 줄(11px semibold, 이 컴퓨터는 모니터 아이콘과 「이 컴퓨터」, 다른 컴퓨터는 서버 아이콘과 이름, 이름 옆에 스페이스 수(`dim`), 연결 점, +, 접기 화살표)이 생긴다. 그 아래 스페이스 줄은 14px 더 들여 쓰이고, 컴퓨터 아이콘 가운데(줄 왼쪽에서 14px)에서 1px `border` 세로선이 그 컴퓨터의 스페이스 줄을 따라 내려온다. 스페이스 줄은 8px 색 점(스페이스 색), 이름, 평범하지 않을 때만 저장소 · 브랜치, 오른쪽에 그 안의 에이전트 수와 가장 급한 상태.
   - 화면 공유(5900)가 열린 다른 컴퓨터 줄에는 화면 공유 단추가 붙는다.
   - 에이전트 목록: 머리 「에이전트 N」과 정렬 아이콘(급한 순서 시계 · 스페이스별 겹친 층 · 컴퓨터별 모니터).
-    - 스페이스별: 스페이스 머리(15px 색 표지, 이름, 수) 아래 에이전트 줄(앱 아이콘, 제목, 지난 시간, 상태). 다른 컴퓨터의 스페이스는 머리 끝에 서버 아이콘과 컴퓨터 이름.
+    - 스페이스별: 스페이스 머리(8px 색 점, 이름, 수) 아래 에이전트 줄(앱 아이콘, 제목, 지난 시간, 상태). 다른 컴퓨터의 스페이스는 머리 끝에 서버 아이콘과 컴퓨터 이름.
     - 컴퓨터별: 컴퓨터 머리(13px 아이콘, 이름, 수, 접기 화살표) 아래 스페이스 묶음이 8px 들여 쓰인다. 두 번째 컴퓨터부터 위에 1px 선.
     - 급한 순서: 확인 필요 · 끝남 · 작업 중 · 쉬는 중 구역. 줄은 「스페이스 · 제목」, 다른 컴퓨터 줄 끝에 서버 아이콘과 이름.
+    - 에이전트 줄의 강약: 작업 중은 이름을 semibold 로, 줄 바탕을 `working` 색 8%(`+ "14"`) 면으로. 상태 표지는 끝남(아직 안 봄)이 `done` 색 15% 원(14px) 안의 `done` 색 체크, 끝내고 본 것이 체크만(끝난 지 한 시간 안이면 `done` 색, 넘으면 `dim`), 일을 시킨 적 없이 쉬는 것이 7px 고리. 끝난 지 한 시간이 지난 쉬는 줄만(지금 보고 있지 않을 때) 이름을 `muted` 로, 줄 전체를 불투명도 0.55 로 흐리게 하고, 마우스를 올리면 원래대로. 방금 끝난 일은 흐리지 않는다. 한 시간은 쉬는 상태가 된 시각부터 세고(끝남과 쉬는 중은 한 상태로 본다), 일을 했는지는 상태가 바뀔 때 앞 상태가 쉬는 중이 아니었는지로 localStorage `changed` 에 적어 둔다.
+    - 에이전트 제목: 이름 붙인 탭이면 탭 이름, 아니면 터미널 제목. Antigravity(agy)는 터미널 제목에 터미널 주소만 남겨, agy 가 저장한 대화 제목을 쓴다.
 - **탭 줄**(42px): 기본 `tabs` 와 오른쪽 96px 「히스토리」 단추(15px 시계 아이콘 `icon.png` + 글자). 패널이 열려 있으면 단추가 눌린 면으로 보인다.
 - **본문**(안쪽 여백 8, 간격 8): 터미널, 숨은 파일 · 변경 패널, 히스토리 칸(384px, 300~720px 로 끌어 바꿈). 맨 아래 상태 줄 28px.
 - **히스토리 패널**: 테두리 대신 바탕보다 옅은 면(`raised`)으로 나눈다.
@@ -48,7 +50,7 @@ Herdr 오른쪽에 「히스토리」 패널을 붙이고, 에이전트가 연 H
 - 문서 찾기(`reader.py`): 요청마다 `docs`. 셸 명령의 `open <파일>`(같은 명령의 `cd` 를 따라가고, 상대 경로는 그 대화의 폴더를 알 때만), 에이전트가 만들거나 고친 `.html`, 답변에 적은 경로(`~/` · `/` 로 시작, 백틱 · `[이름](<경로>)` 안의 띄어쓰기 경로 포함, 지금 있는 파일만). 확장자 `.html .htm .svg .png .jpg .jpeg .gif .webp`. 요청마다 12개.
 - `reader.py [--on <컴퓨터>] --doc <경로> [고친 시각] [크기]`: 그 컴퓨터에서 문서와, 문서가 같은 폴더(아래 폴더 포함) 안에서 `src` · `href` · `url()` 로 부르는 재료(css · js · 그림 · 글꼴, 다른 html 은 빼고, 80개 · 합쳐 12MB까지)를 base64 JSON 으로 낸다. 고친 시각과 크기가 같으면 `{"same": true}`.
 - `mods/doc-view`: `main.js`(다이얼로그, props `docs: [{path, at, topic}]` · `start` · `machine` · `browser`), `view.py`(가져와 `~/.cache/herdr-doc-view/docs/<문서>/` 에 펼치고, 글자 인코딩을 적지 않은 HTML 에는 사본에 `<meta charset="utf-8">` 을 넣고, 그린 조각을 `mods/doc-view/.shots/` 에 둔다. `peek` 은 전에 그린 것만), `render.swift`(처음 쓸 때 `xcrun swiftc -O` 로 `~/.cache/herdr-doc-view/bin/` 에 빌드. WKWebView 를 화면 밖 테두리 없는 창에 두고 accessory 앱으로 돌려 Dock 에 나오지 않는다. 글꼴을 기다려 높이를 재고 1600pt 조각을 2배 PNG 로 찍는다. 60000pt 까지, 25초). 그림 파일은 그리지 않고 그대로 쓴다. 쓰는 `herdr` 함수: `exec` · `appHome` · `closeOverlay` · `props` · `theme`. 아이콘 `icons/*.svg`.
-- `mods/sidebar-spaces` · `sidebar-agents` · `sidebar-chrome`: 기본 `spaces` · `agents` · `workspace-chrome`(0.1.16)을 `mod.clone` 으로 복제해 글자를 한글로 바꾸고 위계를 더한 것. `sidebar-spaces` 는 `hc machine ls --json` 으로 컴퓨터를, `exec("ssh", ["-G", …])` 와 `nc -z -G 2 <주소> 5900` 으로 화면 공유를 5분마다 알아보고 `open` 으로 연다. `sidebar-agents` 는 `shared("agents.sort")` 에 `priority` · `grouped` · `machines` 를 둔다. 아이콘은 기본 `mods/workspace-chrome/*.svg`.
+- `mods/sidebar-spaces` · `sidebar-agents` · `sidebar-chrome`: 기본 `spaces` · `agents` · `workspace-chrome`(0.1.16)을 `mod.clone` 으로 복제해 글자를 한글로 바꾸고 위계를 더한 것. `sidebar-spaces` 는 `hc machine ls --json` 으로 컴퓨터를, `exec("ssh", ["-G", …])` 와 `nc -z -G 2 <주소> 5900` 으로 화면 공유를 5분마다 알아보고 `open` 으로 연다. `sidebar-agents` 는 `shared("agents.sort")` 에 `priority` · `grouped` · `machines` 를 둔다. 아이콘은 기본 `mods/workspace-chrome/*.svg`. `sidebar-agents` 는 Antigravity 에이전트(`app: "antigravity"`)의 대화 제목을 1분마다 읽는다: `hc get <터미널> --json` 의 `foreground.pid` → `lsof -a -p <pid> -Fn` 으로 그 agy 가 연 `~/.gemini/antigravity-cli/presence/<대화>.lock` → `conversation_summaries.db`(`immutable=1`) 의 `conversation_summaries.title`. 다른 컴퓨터는 `exec(…, {on: 컴퓨터})` 로 그 컴퓨터에서 읽는다.
 
 **Watch out:**
 
@@ -64,6 +66,7 @@ Herdr 오른쪽에 「히스토리」 패널을 붙이고, 에이전트가 연 H
 - Xcode 명령줄 도구가 없으면 `xcrun` 이 설치 창을 띄우므로 먼저 `xcode-select -p` 로 확인한다.
 - `claude -p --output-format json` 은 2.1.328 에서 결과 하나가 아니라 이벤트 배열을 낸다.
 - 사이드바 복제본은 Herdr 업데이트를 받지 않는다. 미리 보려고 `herdr-app do mod.open` 을 쓰지 않는다(지금 레이아웃에 블록이 더해진다).
+- 모드의 `exec` 는 PATH 에 `/usr/sbin` 이 없어 `lsof` 를 찾지 못한다. agy 제목을 읽는 스크립트는 첫 줄에서 PATH 를 더한다.
 - `herdr-app check` 는 기본 역할만 그린다. 단추 · 창 · 접힌 사이드바는 값을 넣은 임시 사본으로 확인한다.
 
 **Done when:**
@@ -74,4 +77,5 @@ Herdr 오른쪽에 「히스토리」 패널을 붙이고, 에이전트가 연 H
 - Herdr 에 추가한 다른 컴퓨터의 에이전트에 들어가도 요청이 나온다.
 - 에이전트가 `open` 으로 HTML 을 연 대화를 따라가면 히스토리 머리에 「문서 1」이 생기고, 누르면 그 페이지가 원본과 같은 모양으로 나온다. 다른 컴퓨터의 에이전트가 연 문서도 같다.
 - 에이전트 정렬 팝업에 세 가지가 있고, 컴퓨터별에서 「이 컴퓨터」와 다른 컴퓨터 머리가 나뉜다.
+- 이름 없는 탭에서 도는 agy 가 「Antigravity」가 아니라 agy 대화 제목으로 나오고, 방금 끝난 에이전트는 또렷한 체크로, 끝난 지 한 시간이 지난 에이전트만 흐리게 나오며, 작업 중인 줄은 굵다.
 - `claude` 로그인이 없으면 제목 자리에 에이전트가 한 말의 첫 문장이 오고, 맨 위에 까닭이 나온다.
