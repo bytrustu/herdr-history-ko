@@ -70,7 +70,7 @@ if [ "$mode" = remove ]; then
     if ours_mod "$m"; then rm -rf "${APP:?}/mods/$m"; fi
   done
   rm -f "$RECORD"
-  say "지웠습니다. 정리해 둔 기록은 ~/.cache/herdr-request-log 와 ~/.cache/herdr-doc-view 에 남아 있습니다. 필요 없으면 그 폴더도 지우세요."
+  say "지웠습니다. 정리해 둔 기록은 ~/.cache/herdr-request-log, ~/.cache/herdr-doc-view, ~/.local/state/herdr-revive 에 남아 있습니다. 필요 없으면 그 폴더도 지우세요."
   exit 0
 fi
 

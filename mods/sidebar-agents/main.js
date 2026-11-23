@@ -5,7 +5,7 @@
 
 import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { agents, terminals, panes, focused, spaces, run, theme, shared, setShared, setAgentOrder, openOverlay, closeOverlay, props, window, layout, hc, exec, checking } from "herdr";
+import { agents, terminals, panes, focused, spaces, run, theme, shared, setShared, setAgentOrder, openOverlay, closeOverlay, props, window, layout, hc, exec, checking, appHome, nextCommand } from "herdr";
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -40,6 +40,9 @@ const AGY_TITLE = `PATH="$PATH:/usr/sbin:/usr/bin:/sbin:/bin"
 id=$(lsof -a -p "$1" -Fn 2>/dev/null | sed -n 's#^n.*/antigravity-cli/presence/\\([0-9a-f-]*\\)\\.lock$#\\1#p' | head -n 1)
 [ -n "$id" ] || exit 0
 exec sqlite3 -readonly "file:$HOME/.gemini/antigravity-cli/conversation_summaries.db?immutable=1" "select title from conversation_summaries where conversation_id='$id'" 2>/dev/null`;
+// 재부팅 · 로그아웃 · 코어 재시작 뒤 셸만 남은 터미널: revive.py 가 적어 둔 대화를 이어 연다.
+const REVIVE = () => `${appHome()}/mods/sidebar-agents/revive.py`;
+const APP_WORD = { claude: "Claude Code", codex: "Codex", agy: "Antigravity" };
 const agyName = (l) => (l?.app === "antigravity" ? AGY.get(l.terminal ?? l.address)?.name ?? "" : "");
 
 function leadPanes(all) {
@@ -114,6 +117,105 @@ export default class Agents extends View {
     cx.timer.every(30000, (cx) => cx.notify());
     this.agyBusy = new Set();
     cx.timer.every(5000, (cx) => this.refreshAgy(cx));
+    // 다시 열 에이전트: 켜고 조금 뒤 한 번, 그 뒤로 1분마다(그때마다 지금 터미널을 기록해 둔다).
+    this.revive = { lost: [], busy: false, acting: null, note: null };
+    if (!checking()) {
+      cx.spawn(async (cx) => { await cx.sleep(4000); this.refreshRevive(cx); });
+      cx.timer.every(60000, (cx) => this.refreshRevive(cx));
+      // 명령 sidebar-agents.revive: 「다시 열기」 단추와 같다(단축키로 걸 수 있다).
+      cx.spawn(async (cx) => { for (;;) { const c = await nextCommand(); if (c === "revive" && this.revive.lost.length) this.reviveAct("restore", cx); } });
+    }
+  }
+
+  refreshRevive(cx) {
+    if (this.revive.busy || this.revive.acting) return;
+    this.revive.busy = true;
+    cx.spawn(async (cx) => {
+      try {
+        const r = await exec("python3", ["-I", REVIVE(), "scan"], { timeout: 90000 });
+        const got = r.code === 0 ? JSON.parse(r.stdout) : null;
+        const key = (l) => l.map((x) => x.address).join(",");
+        if (got && Array.isArray(got.lost) && key(got.lost) !== key(this.revive.lost)) {
+          this.revive.lost = got.lost;
+          cx.notify();
+        }
+      } catch {}
+      this.revive.busy = false;
+    });
+  }
+
+  // restore: 셸만 남은 터미널에 이어 여는 명령을 보낸다. dismiss: 이번에는 열지 않는다(다음 재부팅 때 다시 묻는다).
+  reviveAct(what, cx) {
+    if (this.revive.acting) return;
+    this.revive.acting = what;
+    cx.notify();
+    cx.spawn(async (cx) => {
+      let note = null;
+      try {
+        const r = await exec("python3", ["-I", REVIVE(), what], { timeout: 90000 });
+        const got = r.code === 0 ? JSON.parse(r.stdout) : null;
+        if (what === "restore") {
+          const sent = (got?.sent ?? []).filter((x) => x.ok).length;
+          note = sent ? `에이전트 ${sent}개를 다시 열었습니다` : "다시 열지 못했습니다";
+        }
+      } catch {
+        if (what === "restore") note = "다시 열지 못했습니다";
+      }
+      this.revive.lost = [];
+      this.revive.acting = null;
+      this.revive.note = note;
+      cx.notify();
+      if (note) {
+        await cx.sleep(5000);
+        this.revive.note = null;
+        cx.notify();
+      }
+    });
+  }
+
+  reviveCard(t) {
+    const { lost, acting, note } = this.revive;
+    const blue = t.done ?? t.foreground;
+    if (!lost.length) return h_flex().mx(8).mb(8).px(12).h(36).flex_none().gap(8).items_center().rounded(10).bg(blue + "14").text_size(12).text_color(t.foreground)
+      .child(svg("mods/workspace-chrome/check.svg").size(13).flex_none().text_color(blue))
+      .child(div().min_w(0).truncate().child(note));
+    const names = lost.map((x) => {
+      const tab = (x.where || "").split(" / ").pop();
+      return tab && !/^\d+$/.test(tab) ? tab : APP_WORD[x.app] ?? x.app;
+    });
+    const shown = names.slice(0, 3).join(" · ") + (names.length > 3 ? ` 외 ${names.length - 3}개` : "");
+    const button = (id, label, primary, onClick) => div()
+      .id(id)
+      .flex_none()
+      .px(12)
+      .h(26)
+      .rounded(7)
+      .flex()
+      .items_center()
+      .justify_center()
+      .text_size(12)
+      .cursor_pointer()
+      .when(primary, (el) => el.bg(blue).text_color("#ffffff").font_semibold().hover((s) => s.opacity(0.88)))
+      .when(!primary, (el) => el.text_color(t.muted).hover((s) => s.bg(t.hover).text_color(t.foreground)))
+      .on_click((_e, cx) => onClick(cx))
+      .child(label);
+    return v_flex()
+      .mx(8)
+      .mb(8)
+      .px(12)
+      .pt(11)
+      .pb(10)
+      .flex_none()
+      .gap(6)
+      .rounded(10)
+      .bg(blue + "14")
+      .child(h_flex().gap(7).items_center()
+        .child(svg("mods/sidebar-agents/revive.svg").size(14).flex_none().text_color(blue))
+        .child(div().flex_1().min_w(0).truncate().text_size(12.5).font_semibold().text_color(t.foreground).child(`재부팅 전 에이전트 ${lost.length}개`)))
+      .child(div().id("revive-names").min_w(0).truncate().text_size(11.5).text_color(t.muted).tooltip(names.join("\n")).child(shown))
+      .child(h_flex().pt(2).gap(4).items_center()
+        .child(button("revive-go", acting === "restore" ? "여는 중…" : "다시 열기", true, (cx) => this.reviveAct("restore", cx)))
+        .child(div().id("revive-skip").child(button("revive-skip-b", "닫기", false, (cx) => this.reviveAct("dismiss", cx))).tooltip("이번에는 열지 않습니다")));
   }
 
   // agy 의 대화 제목: 처음 보면 바로, 그 뒤로는 1분마다 다시 읽는다(대화가 이어지며 제목이 바뀐다).
@@ -600,6 +702,7 @@ export default class Agents extends View {
             ),
         ),
       )
+      .when(!collapsed && (this.revive?.lost?.length > 0 || Boolean(this.revive?.note)), (el) => el.child(this.reviveCard(t)))
       .when(list.length === 0 && !collapsed, (el) =>
         el.child(div().px(12).text_size(12).text_color(t.dim).child("아직 상태를 알린 에이전트가 없습니다. 에이전트가 상태를 알리면 여기에 나옵니다. 오래된 버전이나 tmux 안의 에이전트는 나오지 않을 수 있습니다.")),
       )
