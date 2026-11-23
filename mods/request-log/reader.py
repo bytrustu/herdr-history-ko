@@ -20,15 +20,18 @@
 #   요청마다 무슨 일인지 짧은 제목을 Claude 에게 받아 적어 둔다(아래 「제목 요약」. 이때만 네트워크를 쓴다).
 #   reader.py --digest <terminal> <path> <at> [model]
 #   끝난 요청 하나의 답변을 한눈에 읽히게 간추려 적어 둔다(결론 한 줄, 한 일, 확인한 것, 남은 것, 알아둘 것).
+#   reader.py --doc <path> [알던 고친 시각] [알던 크기]
+#   에이전트가 연 문서 하나와 그 문서가 같은 폴더 안에서 부르는 파일을 JSON(base64)으로 낸다(문서 보기 doc-view 가 쓴다).
 #   reader.py --on <machine> …
 #   다른 컴퓨터(hc machine ls)에서 도는 에이전트: 위 세 가지를 그 컴퓨터의 대화 파일로 한다(아래 「다른 컴퓨터」).
 # herunan/herdr-over9k 의 prompts.py, claude-info.py (MIT) 를 바탕으로 했다. LICENSE.over9k 참고.
-import base64, calendar, fcntl, glob, hashlib, json, os, re, shlex, shutil, subprocess, sys, time
+import base64, calendar, fcntl, glob, hashlib, json, os, re, shlex, shutil, subprocess, sys, time, urllib.parse
 
 HOME = os.path.expanduser("~")
 CACHE = os.path.join(HOME, ".cache", "herdr-request-log")
-VERSION = 4
+VERSION = 8
 TAIL = 32 * 1024 * 1024
+DEEP = 192 * 1024 * 1024  # 읽는 방식이 바뀌어(VERSION) 다시 읽을 때는 보던 요청을 잃지 않게 이만큼 거슬러 읽는다
 KEEP = 60        # 캐시에 두는 요청 수
 SHOW = 40        # 패널에 내는 요청 수
 MAX_STEPS = 120  # 요청 하나에 두는 단계 수
@@ -455,6 +458,94 @@ def delegate(cur, at, cmd, note):
 
 # ---- 언제 무슨 일을 했나
 
+# ---- 에이전트가 연 문서
+# 요청마다 에이전트가 연 문서(HTML · SVG · 그림)를 적어 둔다: open 으로 연 것, 만들거나 고친 것, 답변에 적은 경로.
+# 문서 보기(doc-view)가 이 목록을 받아 그 컴퓨터에서 문서를 가져와 보인다(아래 --doc). 상대 경로는 그 명령을
+# 돌린 폴더를 알 때만 붙이고, 모르면 적지 않는다.
+DOC_EXT = (".html", ".htm", ".svg", ".png", ".jpg", ".jpeg", ".gif", ".webp")
+DOC_KEEP = 12  # 요청 하나에 두는 문서 수
+_DOC = r"((?:~|/)[^\s`'\"()<>\[\]{}|*]+?\.(?:html?|svg|png|jpe?g|gif|webp))"
+DOC_IN_TEXT = re.compile(r"(?<![\w:/.~-])(?:file://)?" + _DOC + r"(?=$|[\s`'\")\]>.,:;!?])", re.I)
+DOC_IN_ANGLE = re.compile(r"\]\(<(?:file://)?((?:~|/)[^>\n]+?\.(?:html?|svg|png|jpe?g|gif|webp))>\)", re.I)  # [이름](<경로 띄어쓰기>)
+DOC_IN_TICKS = re.compile(r"`(?:file://)?((?:~|/)[^`\n]+?\.(?:html?|svg|png|jpe?g|gif|webp))`", re.I)
+OPENERS = ("open", "xdg-open")
+OPEN_VALUE = ("-a", "-b", "-u")  # 값을 하나 받는 open 옵션
+
+
+def note_doc(cur, p, cwd=None, seen=False, made=False):
+    # made: 에이전트가 만들거나 고친 파일. HTML 만 문서로 본다(아이콘 · 그림 같은 재료는 빼고).
+    # seen: 답변에 적힌 경로라 지금 있는 파일만 적는다(띄어쓰기로 잘린 경로의 꼬리를 잘못 적지 않으려고).
+    if not isinstance(p, str):
+        return
+    p = p.strip().strip("\"'")
+    if p.startswith("file://"):
+        p = urllib.parse.unquote(p[7:])
+    if not p.lower().endswith((".html", ".htm") if made else DOC_EXT) or "$" in p or "*" in p or "\n" in p:
+        return
+    if p.startswith("~/"):
+        p = os.path.expanduser(p)  # 이 리더는 그 대화가 있는 컴퓨터에서 돈다
+    if not os.path.isabs(p):
+        if not (isinstance(cwd, str) and os.path.isabs(cwd)):
+            return
+        p = os.path.join(cwd, p)
+    p = os.path.normpath(p)
+    if seen and not os.path.isfile(p):
+        return
+    docs = cur.setdefault("docs", [])
+    if p in docs:
+        docs.remove(p)
+    docs.append(p)
+    del docs[:-DOC_KEEP]
+
+
+def docs_in_cmd(cur, cmd, cwd=None):
+    # open <문서> 로 연 것. 같은 명령 안의 cd 는 따라간다.
+    if not isinstance(cmd, str) or "open" not in cmd:
+        return
+    for seg in segments(without_heredocs(cmd)):
+        try:
+            words = shlex.split(seg)
+        except ValueError:
+            continue
+        while words and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", words[0]):
+            words = words[1:]
+        if not words:
+            continue
+        if words[0] == "cd" and len(words) > 1:
+            d = os.path.expanduser(words[1]) if words[1].startswith("~") else words[1]
+            if "$" in d:
+                cwd = None
+            elif os.path.isabs(d):
+                cwd = os.path.normpath(d)
+            elif isinstance(cwd, str) and os.path.isabs(cwd):
+                cwd = os.path.normpath(os.path.join(cwd, d))
+            continue
+        if os.path.basename(words[0]) not in OPENERS:
+            continue
+        skip = False
+        for w in words[1:]:
+            if skip:
+                skip = False
+            elif w == "--args":
+                break
+            elif w in OPEN_VALUE:
+                skip = True
+            elif not w.startswith("-"):
+                note_doc(cur, w, cwd)
+
+
+def docs_in_text(cur, text):
+    # 답변에 적은 문서 경로(「열어 보세요: ~/…/x.html」).
+    if not isinstance(text, str) or "." not in text:
+        return
+    text = text[:30000]
+    for rx in (DOC_IN_ANGLE, DOC_IN_TICKS, DOC_IN_TEXT):
+        for m in rx.finditer(text):
+            note_doc(cur, m.group(1), seen=True)
+        if rx is not DOC_IN_TEXT:
+            text = rx.sub(lambda m: " " * len(m.group(0)), text)  # 찾은 자리는 지워 꼬리가 다시 잡히지 않게
+
+
 def secs(at):
     # ISO 시각 → 초. 못 읽으면 None.
     try:
@@ -600,6 +691,7 @@ def claude_assistant(st, e):
         if b.get("type") == "text" and (b.get("text") or "").strip() and not inner:
             cur["reply"] = b["text"].strip()[:30000]
             cur["replyLast"] = True
+            docs_in_text(cur, b["text"])
             beat(cur, at)
             add_step(cur, at, "say", first_line(b["text"]))
         elif b.get("type") == "tool_use":
@@ -614,10 +706,12 @@ def claude_assistant(st, e):
                 p = i.get("file_path") or i.get("notebook_path")
                 if p and p not in cur["edits"]:
                     cur["edits"].append(p)
+                note_doc(cur, p, made=True)
                 if p and not inner:
                     add_step(cur, at, "edit", os.path.basename(p))
             elif name == "Bash":
                 cur["cmds"] += 1
+                docs_in_cmd(cur, i.get("command"), e.get("cwd"))
                 if delegate(cur, at, i.get("command"), i.get("description") or ""):
                     beat(cur, at, "hand")
                     continue
@@ -689,6 +783,8 @@ def on_codex(st, e):
     cur = reqs[-1] if reqs else None
     if e.get("type") == "turn_context":
         st["cx"] = [p.get("model"), p.get("effort")]  # 이 턴의 모델 · effort
+        if isinstance(p.get("cwd"), str):
+            st["cwd"] = p["cwd"]  # 이 턴의 폴더(상대 경로로 연 문서)
         return
     cx = st.get("cx") or [None, None]
     if e.get("type") == "token_usage_record":
@@ -717,6 +813,7 @@ def on_codex(st, e):
         if isinstance(msg, str) and msg.strip():
             cur["reply"] = msg.strip()[:30000]
             cur["replyLast"] = True
+            docs_in_text(cur, msg)
     elif pt == "turn_aborted":
         if cur is not None:
             cur["interrupted"] = True
@@ -747,6 +844,7 @@ def on_codex(st, e):
             if text:
                 cur["reply"] = text[:30000]
                 cur["replyLast"] = True
+                docs_in_text(cur, text)
                 cur["done"] = at or cur["done"]
                 beat(cur, at)
                 add_step(cur, at, "say", first_line(text))
@@ -761,6 +859,7 @@ def on_codex(st, e):
             parsed, argv = it.get("parsed_cmd"), it.get("command")
             first = parsed[0] if isinstance(parsed, list) and parsed and isinstance(parsed[0], dict) else {}
             cmd = first.get("cmd") or (argv[-1] if isinstance(argv, list) and argv else argv)
+            docs_in_cmd(cur, argv[-1] if isinstance(argv, list) and argv else argv, it.get("cwd") or st.get("cwd"))
             if delegate(cur, at, cmd, ""):
                 beat(cur, at, "hand")
             else:
@@ -775,6 +874,7 @@ def on_codex(st, e):
                     continue
                 if path not in cur["edits"]:
                     cur["edits"].append(path)
+                note_doc(cur, path, st.get("cwd"), made=True)
                 add_step(cur, at, "edit", os.path.basename(path))
         elif kind == "McpToolCall":
             beat(cur, at, "etc")
@@ -1012,6 +1112,7 @@ def agy_step(st, models, idx, kind, status, top):
         if text:
             cur["reply"] = text[:30000]
             cur["replyLast"] = True
+            docs_in_text(cur, text)
             beat(cur, end)
             add_step(cur, end, "say", first_line(text))
         if r.get(7):
@@ -1033,6 +1134,7 @@ def agy_step(st, models, idx, kind, status, top):
     if name == "run_command":
         cur["cmds"] += 1
         cmd = args.get("CommandLine") if isinstance(args.get("CommandLine"), str) else ""
+        docs_in_cmd(cur, cmd, args.get("Cwd"))
         if delegate(cur, at, cmd, note):
             beat(cur, at, "hand")
             return
@@ -1047,6 +1149,7 @@ def agy_step(st, models, idx, kind, status, top):
         if isinstance(p, str) and p:
             if p not in cur["edits"]:
                 cur["edits"].append(p)
+            note_doc(cur, p, made=True)
             add_step(cur, at, "edit", os.path.basename(p))
     elif name in AGY_READS:
         beat(cur, at, "read")
@@ -1112,8 +1215,8 @@ def cache_file(path):
     return os.path.join(CACHE, hashlib.sha1(path.encode("utf-8", "replace")).hexdigest()[:20] + ".json")
 
 
-def fresh(path, size):
-    start = max(0, size - TAIL)
+def fresh(path, size, deep=False):
+    start = max(0, size - (DEEP if deep else TAIL))
     return {"v": VERSION, "path": path, "offset": start, "skip": start > 0, "partial": start > 0, "whole": start == 0, "reqs": [], "context": 0, "title": None}
 
 
@@ -1123,9 +1226,10 @@ def load(path, size):
             st = json.load(f)
         if st.get("v") == VERSION and st.get("path") == path and 0 <= st.get("offset", -1) <= size and size - st["offset"] <= TAIL:
             return st
+        old = st.get("path") == path and st.get("v") != VERSION
     except Exception:
-        pass
-    return fresh(path, size)
+        old = False
+    return fresh(path, size, deep=old)
 
 
 def advance(st, path, size):
@@ -1298,7 +1402,7 @@ def emit(st, size, found):
         out.append({"at": r["at"], "n": r.get("n"), "topic": topic_of(names, r), "digest": digest_of(notes, r), "by": by,
                     "pace": pace_of(r), "mix": r.get("mix") or {},
                     "text": r["text"], "also": r["also"],
-                    "reply": r["reply"] if r["replyLast"] else "", "steps": steps, "cut": r["cut"], "edits": r["edits"],
+                    "reply": r["reply"] if r["replyLast"] else "", "steps": steps, "cut": r["cut"], "edits": r["edits"], "docs": r.get("docs") or [],
                     "cmds": r["cmds"], "tokens": sum(r["tok"].values()) if "tok" in r else r.get("tokens", 0),
                     "ms": r["ms"], "done": r["done"], "ended": r["ended"], "interrupted": r["interrupted"]})
     codex, agy = is_codex(st["path"]), is_agy(st["path"])
@@ -1684,6 +1788,62 @@ def digest_main(path, at, model):
 # Claude 에게 묻는 일만 이 컴퓨터에서 한다(이 컴퓨터의 구독 로그인. 그쪽에 Claude 가 없어도 된다).
 
 FAR = ".cache/herdr-request-log"  # 그 컴퓨터의 홈에서
+DOC_MAX = 12 * 1024 * 1024  # 문서와 함께 가져오는 파일을 모두 더한 크기
+DOC_FILES = 80              # 함께 가져오는 파일 수
+DOC_ASSETS = (".css", ".js", ".mjs", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".ico", ".bmp", ".avif",
+              ".woff", ".woff2", ".ttf", ".otf", ".json")  # 함께 가져오는 것(다른 문서로 가는 링크는 가져오지 않는다)
+DOC_REF = re.compile(r"""(?:\b(?:src|href|poster|xlink:href)\s*=\s*["']([^"'#?]+)|url\(\s*["']?([^"')#?]+))""", re.I)
+
+
+def doc_bundle(path, known_mtime="", known_size=""):
+    # known_*: 묻는 쪽이 이미 가진 것. 그대로면 {"same": true} 만 낸다(다시 보내지 않으려고).
+    # 문서 하나와, 그 문서가 같은 폴더(아래 폴더 포함) 안에서 부르는 파일(그림 · CSS · 스크립트). 이 컴퓨터에서 읽는다.
+    p = os.path.expanduser(path) if path.startswith("~/") else path
+    if not os.path.isabs(p):
+        return {"ok": False, "why": "path"}
+    if not os.path.isfile(p):
+        return {"ok": False, "why": "missing"}
+    ext = os.path.splitext(p)[1].lower()
+    if ext not in DOC_EXT:
+        return {"ok": False, "why": "kind"}
+    try:
+        info = os.stat(p)
+        if info.st_size > DOC_MAX:
+            return {"ok": False, "why": "big"}
+        with open(p, "rb") as f:
+            main = f.read()
+    except OSError:
+        return {"ok": False, "why": "missing"}
+    if known_size == str(info.st_size) and known_mtime == repr(info.st_mtime):
+        return {"ok": True, "same": True}
+    name = os.path.basename(p)
+    files, total, skipped = {name: main}, len(main), 0
+    if ext in (".html", ".htm", ".svg"):
+        base = os.path.dirname(p)
+        for m in DOC_REF.finditer(main.decode("utf-8", "replace")):
+            ref = (m.group(1) or m.group(2) or "").strip()
+            if not ref or re.match(r"^[A-Za-z][A-Za-z0-9+.-]*:", ref) or ref.startswith("/"):
+                continue  # 웹 주소 · data: · 절대 경로는 그대로 둔다
+            rel = os.path.normpath(urllib.parse.unquote(ref))
+            if not rel.lower().endswith(DOC_ASSETS):
+                continue
+            if rel in files or rel.startswith("..") or os.path.isabs(rel):
+                continue
+            fp = os.path.join(base, rel)
+            if not os.path.isfile(fp):
+                continue
+            size = os.path.getsize(fp)
+            if len(files) >= DOC_FILES or total + size > DOC_MAX:
+                skipped += 1
+                continue
+            try:
+                with open(fp, "rb") as f:
+                    files[rel] = f.read()
+                total += size
+            except OSError:
+                skipped += 1
+    return {"ok": True, "path": p, "name": name, "mtime": repr(info.st_mtime), "size": info.st_size, "skipped": skipped,
+            "files": {k: base64.b64encode(v).decode("ascii") for k, v in files.items()}}
 
 
 def hc_bin():
@@ -1759,6 +1919,10 @@ def far_json(machine, args, feed=None, timeout=20):
 
 
 def on_main(machine, argv):
+    if argv[:1] == ["--doc"]:
+        out, why = far(machine, ["--doc"] + (argv[1:] + ["", "", ""])[:3], timeout=60)
+        sys.stdout.write(out if out else json.dumps({"ok": False, "why": why}))
+        return
     if argv[:1] == ["--titles"]:
         path, model = (argv[2:] + ["", ""])[:2]
         return titles_flow(lambda: far_json(machine, ["--titles-plan", path]),
@@ -1777,6 +1941,8 @@ def main():
     argv = sys.argv[1:]
     if argv[:1] == ["--on"]:
         return on_main(argv[1] if len(argv) > 1 else "", argv[2:])
+    if argv[:1] == ["--doc"]:
+        return json.dump(doc_bundle(*(argv[1:] + ["", "", ""])[:3]), sys.stdout)
     if argv[:1] == ["--titles"]:
         return titles_main(*(argv[2:] + ["", ""])[:2])
     if argv[:1] == ["--digest"]:

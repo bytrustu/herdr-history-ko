@@ -24,6 +24,9 @@
 // (id 가 "requests-panel" 인 칸을 여닫는다. 다른 id 는 props.panel 로 준다).
 // 명령(keys.json 에 묶을 수 있다): request-log.latest(최근 요청 열기), .next, .prev(가리키는 요청 옮기기),
 // .toggle(가리키는 요청 열기), .close. 모달이 열려 있을 때: .digest, .reply, .steps, .files, .sent(탭), .older, .newer.
+// 에이전트가 연 문서(HTML · SVG · 그림: open 으로 연 것, 만들거나 고친 것, 답변에 적은 경로)는 머리의 「문서 N」과
+// 요청 창의 「문서」 단추로 문서 보기(doc-view)를 열어 본다. 명령 request-log.docs 도 같다. props.browser 는 문서 보기의
+// 「브라우저로 열기」가 쓸 앱 이름(비우면 기본 브라우저).
 // 탭 줄 아이콘(icon.png)은 Codex 의 이미지 생성으로 만들었다.
 // herunan/herdr-over9k 의 Timeline(over9k-prompts, MIT)을 바탕으로 했다. LICENSE.over9k 참고.
 
@@ -69,6 +72,18 @@ const appOf = (a, read) => {
   const k = String(a?.app ?? a?.program?.key ?? "").toLowerCase();
   return k.includes("codex") ? "codex" : k.includes("antigravity") || k === "agy" ? "agy" : "claude";
 };
+// 에이전트가 연 문서: 최근 것부터, 같은 문서는 한 번. 문서 보기(doc-view)에 넘긴다.
+const docsOf = (reqs) => {
+  const seen = new Set(), out = [];
+  for (const p of reqs) for (const path of [...(p.docs ?? [])].reverse()) {
+    if (seen.has(path)) continue;
+    seen.add(path);
+    out.push({ path, at: p.at, topic: p.topic || "" });
+  }
+  return out;
+};
+// 터미널 주소의 컴퓨터(「vps/t7」의 vps). 이 컴퓨터면 null.
+const machineOf = (address) => { const s = String(address ?? ""); const i = s.indexOf("/"); return i < 0 ? null : s.slice(0, i); };
 const LEVEL = { minimal: 1, low: 1, medium: 2, high: 3, xhigh: 4, max: 5 };
 // 한 일의 구성: 종류마다 색이 정해져 있다(밝은 테마, 어두운 테마). 세 색은 어느 둘이 맞닿아도 구별된다. 그 밖은 회색.
 const MIX = [["run", "실행", "#2a78d6", "#3987e5"], ["edit", "수정", "#eb6834", "#d95926"], ["look", "읽기 · 검색", "#1baf7a", "#199e70"], ["rest", "그 밖", null, null]];
@@ -211,6 +226,7 @@ export default class RequestLog extends View {
     this.size = null; // 마지막으로 읽었을 때의 크기
     this.reqs = []; // 최근 것부터. topic: 제목("" 은 요약하지 못한 것, null 은 아직 묻지 않은 것)
     this.copied = null; // 방금 복사한 것("reply" | "sent")
+    this.browser = typeof given.browser === "string" ? given.browser : ""; // 문서 보기의 「브라우저로 열기」가 쓸 앱
     if (this.role === "detail") return this.initDetail(given, cx);
     this.off = given.summaries === false; // 제목 요약을 끈다
     this.model = typeof given.model === "string" ? given.model : ""; // 요약에 쓸 모델(비우면 reader.py 의 기본값)
@@ -366,7 +382,15 @@ export default class RequestLog extends View {
     this.sel = key;
     this.shut();
     this.overlay = openOverlay({ mod: "request-log", kind: "dialog", width: 780, height: 0.86,
-      props: { role: "detail", agent: this.agent, path: this.path, app: this.app, at: key, req: p, newest: this.reqs[0] === p, summaries: !this.off, model: this.model } });
+      props: { role: "detail", agent: this.agent, path: this.path, app: this.app, at: key, req: p, newest: this.reqs[0] === p, summaries: !this.off, model: this.model, browser: this.browser } });
+  }
+
+  // 문서 보기: 에이전트가 그 컴퓨터에서 연 문서를 Herdr 안에서 크게 본다.
+  showDocs(docs, start = 0) {
+    if (!docs.length) return;
+    if (this.role !== "detail") this.shut();
+    openOverlay({ mod: "doc-view", kind: "dialog", width: 0.94, height: 0.94,
+      props: { docs, start, machine: machineOf(this.agent), browser: this.browser } });
   }
 
   shut() {
@@ -383,6 +407,7 @@ export default class RequestLog extends View {
     if (name === "latest") this.view(list[0].at);
     else if (name === "toggle") this.view(list[Math.max(0, cur)].at);
     else if (name === "close") this.shut();
+    else if (name === "docs") this.showDocs(docsOf(list));
     else if (name === "next" || name === "prev") {
       this.sel = list[Math.min(list.length - 1, Math.max(0, cur + (name === "next" ? 1 : -1)))].at;
       const at = this.rows[this.sel];
@@ -741,6 +766,7 @@ export default class RequestLog extends View {
           .child(h_flex().text_size(12).text_color(t.muted)
             .child(div().flex_none().child(when))
             .when(Boolean(word), (el) => el.child(div().flex_none().text_color(live ? t.working : state === "waiting" ? t.blocked : t.muted).child(" · " + word)))))
+        .when((p.docs ?? []).length > 0, (el) => el.child(button("detail-docs", "doc", "문서 " + p.docs.length, () => this.showDocs(docsOf([p])))))
         .child(h_flex().id("detail-close").size(30).flex_none().items_center().justify_center().rounded(15).cursor_pointer().tooltip("닫기 (Esc)")
           .hover((s) => s.bg(t.hover)).on_click(() => { if (this.overlay) closeOverlay(this.overlay); })
           .child(ic("x", 15, t.muted))))
@@ -795,7 +821,7 @@ export default class RequestLog extends View {
       // 지금 하는 일: 마지막으로 한 말이나 설명이 붙은 일, 없으면 마지막 명령.
       const now = steps.findLast((s) => s.k !== "cmd") ?? steps[steps.length - 1];
       const word = wordOf(p, state);
-      const facts = [p.cmds ? "명령 " + p.cmds + "번" : "", edits.length ? "파일 " + edits.length + "개" : "", also.length ? "덧붙인 말 " + also.length + "개" : ""].filter(Boolean).join(" · ");
+      const facts = [p.cmds ? "명령 " + p.cmds + "번" : "", edits.length ? "파일 " + edits.length + "개" : "", p.docs?.length ? "문서 " + p.docs.length + "개" : "", also.length ? "덧붙인 말 " + also.length + "개" : ""].filter(Boolean).join(" · ");
       // 제목을 받는 중에는 옅게 보인다.
       const waiting = p.topic == null && !this.off && !WHY[this.why];
       // 누가 했나: 이 대화의 에이전트(모델 · effort), 그리고 함께 일한 쪽(서브에이전트, 셸에서 부른 Codex · agy · Claude).
@@ -843,7 +869,8 @@ export default class RequestLog extends View {
     });
     this.rows = rows;
 
-    // 머리 오른쪽: 어느 에이전트의 기록인가.
+    // 머리 오른쪽: 에이전트가 연 문서, 어느 에이전트의 기록인가.
+    const docs = docsOf(list);
     const who = a ? [a.program?.name, a.space_name].filter(Boolean).join(" · ") : "";
     const mark = !a ? null : !a.program?.icon ? ic("bot", 13, t.muted)
       : a.program.tint ? svg(a.program.icon).size(13).flex_none().text_color(t.muted) : image(a.program.icon).w(13).h(13).flex_none();
@@ -872,6 +899,10 @@ export default class RequestLog extends View {
         .child(image("mods/request-log/icon.png").w(18).h(18).flex_none())
         .child(div().flex_none().text_size(14).font_semibold().child("히스토리"))
         .child(div().flex_1())
+        .when(docs.length > 0, (el) => el.child(h_flex().id("docs-open").h(24).pl(7).pr(9).gap(5).flex_none().items_center().rounded(12).bg(t.raised)
+          .text_size(11.5).text_color(t.muted).cursor_pointer().hover((s) => s.bg(t.selected)).tooltip("에이전트가 연 문서 보기")
+          .on_click((_e, cx) => { this.showDocs(docs); cx.notify(); })
+          .child(ic("doc", 13, t.muted)).child("문서 " + docs.length)))
         .when(Boolean(a), (el) => el.child(h_flex().h(24).pl(8).pr(10).gap(6).min_w(0).items_center().rounded(12).bg(t.raised).text_size(11.5).text_color(t.muted)
           .child(mark ?? ic("bot", 13, t.muted))
           .child(div().min_w(0).truncate().child(who)))))

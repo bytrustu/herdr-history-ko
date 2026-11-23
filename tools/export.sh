@@ -4,7 +4,7 @@
 set -eu
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APP="${HERDR_APP_HOME:-$HOME/.config/herdr-app}"
-MODS="request-log sidebar-spaces sidebar-agents sidebar-chrome"
+MODS="request-log doc-view sidebar-spaces sidebar-agents sidebar-chrome"
 for m in $MODS; do
   [ -f "$APP/mods/$m/main.js" ] || { printf '%s 모드가 없습니다: %s\n' "$m" "$APP/mods/$m" >&2; exit 1; }
   # Herdr 가 쓰는 파일(.d.ts, jsconfig), 다른 안을 둔 alt, 숨김 파일은 옮기지 않는다.

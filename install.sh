@@ -12,7 +12,7 @@ APP="${HERDR_APP_HOME:-$HOME/.config/herdr-app}"
 KIT="herdr-history-ko"
 RECORD="$APP/.$KIT"
 VERSION="$(tr -d ' \n' < "$HERE/VERSION")"
-MODS="request-log sidebar-spaces sidebar-agents sidebar-chrome"
+MODS="request-log doc-view sidebar-spaces sidebar-agents sidebar-chrome"
 LAYOUTS="history history-sidebar"
 
 say() { printf '%s\n' "$*"; }
@@ -70,7 +70,7 @@ if [ "$mode" = remove ]; then
     if ours_mod "$m"; then rm -rf "${APP:?}/mods/$m"; fi
   done
   rm -f "$RECORD"
-  say "지웠습니다. 패널이 정리해 둔 기록은 ~/.cache/herdr-request-log 에 남아 있습니다. 필요 없으면 그 폴더도 지우세요."
+  say "지웠습니다. 정리해 둔 기록은 ~/.cache/herdr-request-log 와 ~/.cache/herdr-doc-view 에 남아 있습니다. 필요 없으면 그 폴더도 지우세요."
   exit 0
 fi
 
@@ -126,6 +126,9 @@ if [ -n "$before" ] && [ "$before" != "$VERSION" ]; then say "$before 에서 $VE
 elif [ -n "$before" ]; then say "$VERSION 을 다시 설치했습니다."
 else say "$VERSION 을 설치했습니다."; fi
 [ -n "$keep" ] && say "바꾸기 전의 파일은 $keep 에 복사해 두었습니다."
+if ! xcode-select -p >/dev/null 2>&1; then
+  say "참고: 문서 보기는 Xcode 명령줄 도구로 문서를 그립니다. 터미널에서 xcode-select --install 로 설치해 두세요."
+fi
 
 if ! herdr --version >/dev/null 2>&1; then
   say "Herdr 를 열고 ctrl-shift-l 을 눌러 레이아웃을 $layout 로 바꿔 주세요."
